@@ -3,6 +3,9 @@
  *
  *  Created on: Dec 12, 2016
  *      Author: Tiffany Huang
+ *
+ *  Changed on: May 7, 2017
+ *      Author: Yury Melnikov
  */
 
 #include "particle_filter.h"
