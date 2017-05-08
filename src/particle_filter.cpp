@@ -9,7 +9,6 @@
  */
 
 #include "particle_filter.h"
-#include <map>
 #include <numeric>
 #include <random>
 
