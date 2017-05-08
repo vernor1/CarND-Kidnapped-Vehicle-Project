@@ -4,7 +4,7 @@
  *  Created on: Dec 12, 2016
  *      Author: Tiffany Huang
  *
- *  Changed on: May 7, 2017
+ *  Changed on: May 8, 2017
  *      Author: Yury Melnikov
  */
 
@@ -17,6 +17,9 @@ namespace {
 
 // Local Constants
 // -----------------------------------------------------------------------------
+
+// A value below this absolute constant is considered zero
+const auto kEpsilon = 1e-6;
 
 // 2*Pi, needed for computing multivariate Gaussian distribution
 const auto k2pi = 2. * M_PI;
@@ -67,33 +70,51 @@ void ParticleFilter::prediction(double delta_t,
                                 double std_pos[],
                                 double velocity,
                                 double yaw_rate) {
-  const auto velocity_by_yaw_rate = velocity / yaw_rate;
-  const auto yaw_rate_delta_t = yaw_rate * delta_t;
+  double v_dt = 0;
+  double v_by_theta_dot = 0;
+  double theta_dot_dt = 0;
 
+  bool is_zero_yaw_rate = std::fabs(yaw_rate) < kEpsilon;
+  if (is_zero_yaw_rate) {
+    v_dt = velocity * delta_t;
+  } else {
+    v_by_theta_dot = velocity / yaw_rate;
+    theta_dot_dt = yaw_rate * delta_t;
+  }
+
+  // Create normal (Gaussian) distributions for x, y, theta
   std::random_device rd;
   std::default_random_engine gen(rd());
+  std::normal_distribution<double> dist_x(0, std_pos[0]);
+  std::normal_distribution<double> dist_y(0, std_pos[1]);
+  std::normal_distribution<double> dist_theta(0, std_pos[2]);
 
   for (auto& p : particles) {
-    // Equations for updating x, y and the yaw angle when the yaw rate is not
-    // equal to zero:
-    //   p_x += v / theta_dot * (sin(p_theta + theta_dot * dt) - sin(p_theta))
-    //   p_y += v / theta_dot * (cos(p_theta) - cos(p_theta + theta_dot * dt))
-    //   p_theta += theta_dot * dt
-    p.x += velocity_by_yaw_rate
-         * (std::sin(p.theta + yaw_rate_delta_t) - std::sin(p.theta));
-    p.y += velocity_by_yaw_rate
-         * (std::cos(p.theta) - std::cos(p.theta + yaw_rate_delta_t));
-    p.theta += yaw_rate_delta_t;
-
-    // Create normal (Gaussian) distributions for x, y, theta
-    std::normal_distribution<double> dist_x(p.x, std_pos[0]);
-    std::normal_distribution<double> dist_y(p.y, std_pos[1]);
-    std::normal_distribution<double> dist_theta(p.theta, std_pos[2]);
+    if (is_zero_yaw_rate) {
+      // Equations for updating x, y and the yaw angle when the yaw rate is
+      // equal to zero:
+      //   p_x += v * dt * cos(p_theta)
+      //   p_y += v * dt * sin(p_theta)
+      //   p_theta = p_theta
+      p.x += v_dt * std::cos(p.theta);
+      p.y += v_dt * std::sin(p.theta);
+    } else {
+      // Equations for updating x, y and the yaw angle when the yaw rate is not
+      // equal to zero:
+      //   p_x += v / theta_dot * (sin(p_theta + theta_dot * dt) - sin(p_theta))
+      //   p_y += v / theta_dot * (cos(p_theta) - cos(p_theta + theta_dot * dt))
+      //   p_theta += theta_dot * dt
+      p.x += v_by_theta_dot
+           * (std::sin(p.theta + theta_dot_dt) - std::sin(p.theta));
+      p.y += v_by_theta_dot
+           * (std::cos(p.theta) - std::cos(p.theta + theta_dot_dt));
+      p.theta += theta_dot_dt;
+    }
 
     // Add random Gaussian noise
-    p.x = dist_x(gen);
-    p.y = dist_y(gen);
-    p.theta = dist_theta(gen);
+    p.x += dist_x(gen);
+    p.y += dist_y(gen);
+    p.theta += dist_theta(gen);
   }
 }
 
@@ -137,21 +158,24 @@ void ParticleFilter::updateWeights(double sensor_range,
     for (const auto& obs: transformed_observations) {
       // Check that transformed observation is within range
       if (GetDistance(p.x, p.y, obs.x, obs.y) < sensor_range) {
-        // Create an ordered map of distances and corresponding landmarks
-        std::map<double, Map::single_landmark_s> landmark_distances;
+        bool is_landmark_found = false;
+        auto nearest_distance = std::numeric_limits<double>::max();
+        Coordinates nearest_landmark;
         for (const auto& landmark : map_landmarks.landmark_list) {
           auto distance = GetDistance(obs.x, obs.y, landmark.x_f, landmark.y_f);
           // Check that landmark is within range
-          if (distance < sensor_range) {
-            landmark_distances[distance] = landmark;
+          if (distance < sensor_range && distance < nearest_distance) {
+              is_landmark_found = true;
+              nearest_distance = distance;
+              nearest_landmark.x = landmark.x_f;
+              nearest_landmark.y = landmark.y_f;
           }
         }
-        if (!landmark_distances.empty()) {
+        if (is_landmark_found) {
 	  // Update the weights of each particle using a multivariate Gaussian
           // distribution
-          const auto& nearest_landmark = landmark_distances.begin()->second;
-          const auto dx = obs.x - nearest_landmark.x_f;
-          const auto dy = obs.y - nearest_landmark.y_f;
+          const auto dx = obs.x - nearest_landmark.x;
+          const auto dy = obs.y - nearest_landmark.y;
           p.weight *= one_by_2_pi_sigma_xy
                     * std::exp(-(dx * dx / double_sigma_x_sq
                                + dy * dy / double_sigma_y_sq));
