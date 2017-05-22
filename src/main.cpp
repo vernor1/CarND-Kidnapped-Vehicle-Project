@@ -1,176 +1,314 @@
-/*
- * main.cpp
- * Reads in data and runs 2D particle filter.
- *  Created on: Dec 13, 2016
- *      Author: Tiffany Huang
- */
-
-#include <iostream>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <random>
-
+#include <sstream>
 #include "particle_filter.h"
-#include "helper_functions.h"
 
-using namespace std;
+// Local Types
+// -----------------------------------------------------------------------------
 
+typedef std::normal_distribution<double> Distribution;
 
+struct Control {
+  // Velocity [m/s]
+  double velocity;
+  // Yaw rate [rad/s]
+  double yaw_rate;
+};
+typedef std::vector<Control> ControlSequence;
 
-int main() {
-	
-	// parameters related to grading.
-	int time_steps_before_lock_required = 100; // number of time steps before accuracy is checked by grader.
-	double max_runtime = 45; // Max allowable runtime to pass [sec]
-	double max_translation_error = 1; // Max allowable translation error to pass [m]
-	double max_yaw_error = 0.05; // Max allowable yaw error [rad]
+typedef std::vector<ParticleFilter::DirectedPosition> DirectedPositionSequence;
 
+// Local Constants
+// -----------------------------------------------------------------------------
 
+const char kLandmarksFileName[] = "data/map_data.txt";
 
-	// Start timer.
-	int start = clock();
-	
-	//Set up parameters here
-	double delta_t = 0.1; // Time elapsed between measurements [sec]
-	double sensor_range = 50; // Sensor range [m]
-	
-	/*
-	 * Sigmas - just an estimate, usually comes from uncertainty of sensor, but
-	 * if you used fused data from multiple sensors, it's difficult to find
-	 * these uncertainties directly.
-	 */
-	double sigma_pos [3] = {0.3, 0.3, 0.01}; // GPS measurement uncertainty [x [m], y [m], theta [rad]]
-	double sigma_landmark [2] = {0.3, 0.3}; // Landmark measurement uncertainty [x [m], y [m]]
+const char kControlDataFileName[] = "data/control_data.txt";
 
-	// noise generation
-	default_random_engine gen;
-	normal_distribution<double> N_x_init(0, sigma_pos[0]);
-	normal_distribution<double> N_y_init(0, sigma_pos[1]);
-	normal_distribution<double> N_theta_init(0, sigma_pos[2]);
-	normal_distribution<double> N_obs_x(0, sigma_landmark[0]);
-	normal_distribution<double> N_obs_y(0, sigma_landmark[1]);
-	double n_x, n_y, n_theta, n_range, n_heading;
-	// Read map data
-	Map map;
-	if (!read_map_data("data/map_data.txt", map)) {
-		cout << "Error: Could not open map file" << endl;
-		return -1;
-	}
+const char kGroundTruthDataFileName[] = "data/gt_data.txt";
 
-	// Read position data
-	vector<control_s> position_meas;
-	if (!read_control_data("data/control_data.txt", position_meas)) {
-		cout << "Error: Could not open position/control measurement file" << endl;
-		return -1;
-	}
-	
-	// Read ground truth data
-	vector<ground_truth> gt;
-	if (!read_gt_data("data/gt_data.txt", gt)) {
-		cout << "Error: Could not open ground truth data file" << endl;
-		return -1;
-	}
-	
-	// Run particle filter!
-	int num_time_steps = position_meas.size();
-	ParticleFilter pf;
-	double total_error[3] = {0,0,0};
-	double cum_mean_error[3] = {0,0,0};
-	
-	for (int i = 0; i < num_time_steps; ++i) {
-		cout << "Time step: " << i << endl;
-		// Read in landmark observations for current time step.
-		ostringstream file;
-		file << "data/observation/observations_" << setfill('0') << setw(6) << i+1 << ".txt";
-		vector<LandmarkObs> observations;
-		if (!read_landmark_data(file.str(), observations)) {
-			cout << "Error: Could not open observation file " << i+1 << endl;
-			return -1;
-		}
-		
-		// Initialize particle filter if this is the first time step.
-		if (!pf.initialized()) {
-			n_x = N_x_init(gen);
-			n_y = N_y_init(gen);
-			n_theta = N_theta_init(gen);
-			pf.init(gt[i].x + n_x, gt[i].y + n_y, gt[i].theta + n_theta, sigma_pos);
-		}
-		else {
-			// Predict the vehicle's next state (noiseless).
-			pf.prediction(delta_t, sigma_pos, position_meas[i-1].velocity, position_meas[i-1].yawrate);
-		}
-		// simulate the addition of noise to noiseless observation data.
-		vector<LandmarkObs> noisy_observations;
-		LandmarkObs obs;
-		for (int j = 0; j < observations.size(); ++j) {
-			n_x = N_obs_x(gen);
-			n_y = N_obs_y(gen);
-			obs = observations[j];
-			obs.x = obs.x + n_x;
-			obs.y = obs.y + n_y;
-			noisy_observations.push_back(obs);
-		}
+// Number of time steps before accuracy is checked by grader
+enum { kTimeStepsBeforeLockRequired = 100 };
 
-		// Update the weights and resample
-		pf.updateWeights(sensor_range, sigma_landmark, noisy_observations, map);
-		pf.resample();
-		
-		// Calculate and output the average weighted error of the particle filter over all time steps so far.
-		vector<Particle> particles = pf.particles;
-		int num_particles = particles.size();
-		double highest_weight = 0.0;
-		Particle best_particle;
-		for (int i = 0; i < num_particles; ++i) {
-			if (particles[i].weight > highest_weight) {
-				highest_weight = particles[i].weight;
-				best_particle = particles[i];
-			}
-		}
-		double *avg_error = getError(gt[i].x, gt[i].y, gt[i].theta, best_particle.x, best_particle.y, best_particle.theta);
+// Max allowed completion time to pass [sec]
+const double kMaxCompletionTime = 45;
 
-		for (int j = 0; j < 3; ++j) {
-			total_error[j] += avg_error[j];
-			cum_mean_error[j] = total_error[j] / (double)(i + 1);
-		}
-		
-		// Print the cumulative weighted error
-		cout << "Cumulative mean weighted error: x " << cum_mean_error[0] << " y " << cum_mean_error[1] << " yaw " << cum_mean_error[2] << endl;
-		
-		// If the error is too high, say so and then exit.
-		if (i >= time_steps_before_lock_required) {
-			if (cum_mean_error[0] > max_translation_error || cum_mean_error[1] > max_translation_error || cum_mean_error[2] > max_yaw_error) {
-				if (cum_mean_error[0] > max_translation_error) {
-					cout << "Your x error, " << cum_mean_error[0] << " is larger than the maximum allowable error, " << max_translation_error << endl;
-				}
-				else if (cum_mean_error[1] > max_translation_error) {
-					cout << "Your y error, " << cum_mean_error[1] << " is larger than the maximum allowable error, " << max_translation_error << endl;
-				}
-				else {
-					cout << "Your yaw error, " << cum_mean_error[2] << " is larger than the maximum allowable error, " << max_yaw_error << endl;
-				}
-				return -1;
-			}
-		}
-	}
-	
-	// Output the runtime for the filter.
-	int stop = clock();
-	double runtime = (stop - start) / double(CLOCKS_PER_SEC);
-	cout << "Runtime (sec): " << runtime << endl;
-	
-	// Print success if accuracy and runtime are sufficient (and this isn't just the starter code).
-	if (runtime < max_runtime && pf.initialized()) {
-		cout << "Success! Your particle filter passed!" << endl;
-	}
-	else if (!pf.initialized()) {
-		cout << "This is the starter code. You haven't initialized your filter." << endl;
-	}
-	else {
-		cout << "Your runtime " << runtime << " is larger than the maximum allowable runtime, " << max_runtime << endl;
-		return -1;
-	}
-	
-	return 0;
+// Max allowed translation error to pass [m]
+const double kMaxTranslationError = 1;
+
+// Max allowed yaw error [rad]
+const double kMaxYawError = 0.05;
+
+// Time elapsed between measurements [sec]
+const double kDeltaT = 0.1;
+
+// Sensor range [m]
+const double kSensorRange = 50;
+
+// Sigmas - just an estimate, usually comes from uncertainty of sensor, but if
+// you used fused data from multiple sensors, it's difficult to find these
+// uncertainties directly:
+// GPS measurement uncertainty x [m], y [m], yaw [rad]
+const ParticleFilter::DirectedPosition kSigmaPos(0.3, 0.3, 0.01);
+// Observation measurement uncertainty x [m], y [m]
+const ParticleFilter::Position kSigmaObs(0.3, 0.3);
+
+// Number of particles
+enum { kNumParticles = 50 };
+
+// Local Helper-Functions
+// -----------------------------------------------------------------------------
+
+/* Reads map data from a file.
+ * @param filename Name of file containing map data.
+ * @output True if opening and reading file was successful
+ */
+ParticleFilter::PositionSequence GetLandmarks(
+  const std::string& file_name) {
+
+  std::ifstream ifs(file_name, std::ifstream::in);
+  if (!ifs) {
+    throw std::invalid_argument("Could not open landmark file");
+  }
+
+  ParticleFilter::PositionSequence landmarks;
+  // A single line of map file
+  std::string line;
+  // Run over each single line
+  while (std::getline(ifs, line)) {
+    ParticleFilter::Position landmark;
+    // Landmark Id is not used in this project
+    int id;
+    // Read data from current line
+    std::istringstream iss(line);
+    iss >> landmark.x >> landmark.y >> id;
+    // Add to landmark sequence
+    landmarks.push_back(landmark);
+  }
+  return landmarks;
 }
 
+/* Reads control data from a file.
+ * @param filename Name of file containing control measurements.
+ * @output True if opening and reading file was successful
+ */
+ControlSequence GetControlMeasurements(const std::string& file_name) {
 
+  // Open the control data file
+  std::ifstream ifs(file_name, std::ifstream::in);
+  if (!ifs) {
+    throw std::invalid_argument("Could not open control data file");
+  }
+
+  ControlSequence control_measurements;
+  // Run over each single line
+  std::string line;
+  while (std::getline(ifs, line)) {
+    Control control;
+    std::istringstream iss(line);
+    iss >> control.velocity >> control.yaw_rate;
+    // Add to sequence of control measurements
+    control_measurements.push_back(control);
+  }
+  return control_measurements;
+}
+
+/* Reads ground truth data from a file.
+ * @param filename Name of file containing ground truth.
+ * @output True if opening and reading file was successful
+ */
+DirectedPositionSequence GetGroundTruthData(const std::string& file_name) {
+
+  std::ifstream ifs(file_name, std::ifstream::in);
+  if (!ifs) {
+    throw std::invalid_argument("Could not open ground truth file");
+  }
+
+  DirectedPositionSequence positions;
+  // Run over each single line
+  std::string line;
+  while (std::getline(ifs, line)) {
+    ParticleFilter::DirectedPosition position;
+    std::istringstream iss(line);
+    iss >> position.x >> position.y >> position.yaw;
+    // Add to sequence of ground truth data
+    positions.push_back(position);
+  }
+  return positions;
+}
+
+template<typename G>
+ParticleFilter::PositionSequence GetNoisyObservations(
+  G& gen,
+  Distribution& dist_x,
+  Distribution& dist_y,
+  unsigned int observation_id) {
+
+  // Read in landmark observations for current time step.
+  std::ostringstream file_name;
+  file_name << "data/observation/observations_" << std::setfill('0')
+            << std::setw(6) << observation_id + 1 << ".txt";
+  // Open file of landmark measurements
+  std::ifstream ifs(file_name.str(), std::ifstream::in);
+  if (!ifs) {
+    throw std::invalid_argument("Could not open observation file");
+  }
+
+  ParticleFilter::PositionSequence observations;
+  // Run over each single line
+  std::string line;
+  while (std::getline(ifs, line)) {
+    std::istringstream iss(line);
+    ParticleFilter::Position observation;
+    // Read the observation
+    iss >> observation.x >> observation.y;
+    // Simulate the addition of noise to noiseless observation data
+    observation.x += dist_x(gen);
+    observation.y += dist_y(gen);
+    observations.push_back(observation);
+  }
+  return observations;
+}
+
+ParticleFilter::DirectedPosition GetError(
+  const ParticleFilter::DirectedPosition& ground_truth,
+  const ParticleFilter::DirectedPosition& position) {
+
+  ParticleFilter::DirectedPosition error(
+    std::fabs(position.x - ground_truth.x),
+    std::fabs(position.y - ground_truth.y),
+    std::fabs(position.yaw - ground_truth.yaw));
+  error.yaw = std::fmod(error.yaw, 2.0 * M_PI);
+  if (error.yaw > M_PI) {
+    error.yaw = 2.0 * M_PI - error.yaw;
+  }
+  return error;
+}
+
+// main
+// -----------------------------------------------------------------------------
+
+int main() {
+  // Start timer
+  auto start_time = std::clock();
+  // Noise generation
+  std::random_device random_device;
+  std::default_random_engine rng(random_device());
+  Distribution dist_obs_x(0, kSigmaObs.x);
+  Distribution dist_obs_y(0, kSigmaObs.y);
+
+  // Read landmarks, control data, ground truth data
+  ParticleFilter::PositionSequence landmarks;
+  ControlSequence control_measurements;
+  DirectedPositionSequence ground_truth_data;
+  try {
+    landmarks = GetLandmarks(kLandmarksFileName);
+    control_measurements = GetControlMeasurements(kControlDataFileName);
+    ground_truth_data = GetGroundTruthData(kGroundTruthDataFileName);
+  }
+  catch (const std::exception& e) {
+    std::cout << e.what() << std::endl;
+    return -1;
+  }
+
+  // Run particle filter
+  std::unique_ptr<ParticleFilter> particle_filter;
+  ParticleFilter::DirectedPosition total_error;
+  ParticleFilter::DirectedPosition mean_error;
+
+  for (auto step = 0; step < control_measurements.size(); ++step) {
+    std::cout << "Time step: " << step << std::endl;
+    // Initialize particle filter if this is the first time step.
+    if (particle_filter) {
+      // Predict the vehicle's next state
+      particle_filter->Predict(kDeltaT,
+                               kSigmaPos,
+                               control_measurements[step - 1].velocity,
+                               control_measurements[step - 1].yaw_rate);
+    }
+    else {
+      Distribution dist_init_x(ground_truth_data[step].x, kSigmaPos.x);
+      Distribution dist_init_y(ground_truth_data[step].y, kSigmaPos.y);
+      Distribution dist_init_yaw(ground_truth_data[step].yaw, kSigmaPos.yaw);
+      particle_filter.reset(new ParticleFilter(
+        kNumParticles,
+        ParticleFilter::DirectedPosition(dist_init_x(rng),
+                                         dist_init_y(rng),
+                                         dist_init_yaw(rng)),
+        kSigmaPos));
+    }
+
+    ParticleFilter::Particle best_particle;
+    try {
+      // Update the weights and resample
+      best_particle = particle_filter->Update(
+        kSensorRange,
+        kSigmaObs,
+        GetNoisyObservations(rng, dist_obs_x, dist_obs_y, step),
+        landmarks);
+    }
+    catch (const std::exception& e) {
+      std::cout << e.what() << std::endl;
+      return -1;
+    }
+
+    // Calculate and output the average weighted error of the particle filter
+    // over all time steps so far
+    auto position_error = GetError(ground_truth_data[step], best_particle);
+    total_error.x += position_error.x;
+    total_error.y += position_error.y;
+    total_error.yaw += position_error.yaw;
+    mean_error.x = total_error.x / (step + 1);
+    mean_error.y = total_error.y / (step + 1);
+    mean_error.yaw = total_error.yaw / (step + 1);
+
+    // Print the cumulative weighted error
+    std::cout << "Cumulative mean weighted error: x " << mean_error.x
+              << " y " << mean_error.y
+              << " yaw " << mean_error.yaw << std::endl;
+
+    // If the error is too high, say so and then exit
+    if (step >= kTimeStepsBeforeLockRequired) {
+      if (mean_error.x > kMaxTranslationError) {
+        std::cout << "x error, " << mean_error.x
+                  << " is larger than the maximum allowed error, "
+                  << kMaxTranslationError << std::endl;
+        return -1;
+      }
+      if (mean_error.y > kMaxTranslationError) {
+        std::cout << "y error, " << mean_error.y
+                  << " is larger than the maximum allowed error, "
+                  << kMaxTranslationError << std::endl;
+        return -1;
+      }
+      if (mean_error.yaw > kMaxYawError) {
+        std::cout << "yaw error, " << mean_error.yaw
+                  << " is larger than the maximum allowed error, "
+                  << kMaxYawError << std::endl;
+        return -1;
+      }
+    }
+  }
+
+  // Output the completion time for the filter
+  auto stop_time = std::clock();
+  double completion_time = (stop_time - start_time)
+                           / static_cast<double>(CLOCKS_PER_SEC);
+  std::cout << "Completion time (sec): " << completion_time << std::endl;
+
+  // Print success if accuracy and completion time are sufficient
+  if (completion_time < kMaxCompletionTime) {
+    std::cout << "Success! The particle filter passed!" << std::endl;
+  }
+  else {
+    std::cout << "Completion time " << completion_time
+              << " is larger than the maximum allowed completion time, "
+              << kMaxCompletionTime << std::endl;
+    return -1;
+  }
+
+  return 0;
+}
