@@ -24,11 +24,11 @@ typedef std::vector<ParticleFilter::DirectedPosition> DirectedPositionSequence;
 // Local Constants
 // -----------------------------------------------------------------------------
 
+// File names
 const char kLandmarksFileName[] = "data/map_data.txt";
-
 const char kControlDataFileName[] = "data/control_data.txt";
-
 const char kGroundTruthDataFileName[] = "data/gt_data.txt";
+const char kObservationFileNamePrefix[] = "data/observation/observations_";
 
 // Number of time steps before accuracy is checked by grader
 enum { kTimeStepsBeforeLockRequired = 100 };
@@ -62,22 +62,17 @@ enum { kNumParticles = 50 };
 // Local Helper-Functions
 // -----------------------------------------------------------------------------
 
-/* Reads map data from a file.
- * @param filename Name of file containing map data.
- * @output True if opening and reading file was successful
- */
-ParticleFilter::PositionSequence GetLandmarks(
-  const std::string& file_name) {
-
+// Reads the map of lanmarks from a file.
+// @param[in] file_name  Name of the file containing the map data
+// @return  The sequence of lanmark positions
+ParticleFilter::PositionSequence GetLandmarks(const std::string& file_name) {
   std::ifstream ifs(file_name, std::ifstream::in);
   if (!ifs) {
     throw std::invalid_argument("Could not open landmark file");
   }
-
   ParticleFilter::PositionSequence landmarks;
-  // A single line of map file
-  std::string line;
   // Run over each single line
+  std::string line;
   while (std::getline(ifs, line)) {
     ParticleFilter::Position landmark;
     // Landmark Id is not used in this project
@@ -91,18 +86,14 @@ ParticleFilter::PositionSequence GetLandmarks(
   return landmarks;
 }
 
-/* Reads control data from a file.
- * @param filename Name of file containing control measurements.
- * @output True if opening and reading file was successful
- */
+// Reads control measurements from a file.
+// @param[in] file_name  Name of the file containing the control measurements
+// @return  The sequence of control measurements
 ControlSequence GetControlMeasurements(const std::string& file_name) {
-
-  // Open the control data file
   std::ifstream ifs(file_name, std::ifstream::in);
   if (!ifs) {
     throw std::invalid_argument("Could not open control data file");
   }
-
   ControlSequence control_measurements;
   // Run over each single line
   std::string line;
@@ -116,10 +107,9 @@ ControlSequence GetControlMeasurements(const std::string& file_name) {
   return control_measurements;
 }
 
-/* Reads ground truth data from a file.
- * @param filename Name of file containing ground truth.
- * @output True if opening and reading file was successful
- */
+// Reads ground truth data from a file.
+// @param[in] file_name  Name of the file containing the ground truth data
+// @return  The sequence of ground truth positions
 DirectedPositionSequence GetGroundTruthData(const std::string& file_name) {
 
   std::ifstream ifs(file_name, std::ifstream::in);
@@ -140,16 +130,22 @@ DirectedPositionSequence GetGroundTruthData(const std::string& file_name) {
   return positions;
 }
 
+// Reads observation data from a file and adds Gausian noise to it.
+// @param[in] rng  Random number generator
+// @param[in] dist_x  Distribution of coordinate x
+// @param[in] dist_y  Distribution of coordinate y
+// @param[in] observation_id  Identifier of the observation
+// @return  The sequence of observation positions
 template<typename G>
 ParticleFilter::PositionSequence GetNoisyObservations(
-  G& gen,
+  G& rng,
   Distribution& dist_x,
   Distribution& dist_y,
   unsigned int observation_id) {
 
-  // Read in landmark observations for current time step.
+  // Read in landmark observations for current time step
   std::ostringstream file_name;
-  file_name << "data/observation/observations_" << std::setfill('0')
+  file_name << kObservationFileNamePrefix << std::setfill('0')
             << std::setw(6) << observation_id + 1 << ".txt";
   // Open file of landmark measurements
   std::ifstream ifs(file_name.str(), std::ifstream::in);
@@ -166,13 +162,17 @@ ParticleFilter::PositionSequence GetNoisyObservations(
     // Read the observation
     iss >> observation.x >> observation.y;
     // Simulate the addition of noise to noiseless observation data
-    observation.x += dist_x(gen);
-    observation.y += dist_y(gen);
+    observation.x += dist_x(rng);
+    observation.y += dist_y(rng);
     observations.push_back(observation);
   }
   return observations;
 }
 
+// Calcualtes the deviation error between a position and its ground truth.
+// @param[in] ground_truth  The ground truth position
+// @param[in] position  The position
+// @return  The position error
 ParticleFilter::DirectedPosition GetError(
   const ParticleFilter::DirectedPosition& ground_truth,
   const ParticleFilter::DirectedPosition& position) {

@@ -23,6 +23,9 @@ double GetDistance(double x0, double y0, double x1, double y1) {
 
 } // namespace
 
+// Public Members
+// -----------------------------------------------------------------------------
+
 ParticleFilter::ParticleFilter(unsigned int num_particles,
                                const DirectedPosition& init_pos,
                                const DirectedPosition& std_pos)
