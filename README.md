@@ -91,7 +91,7 @@ The inputs to the particle filter are in the `data` directory.
 2. y position
 3. landmark id
 
-> * Map data provided by 3D Mapping Solutions GmbH.
+\* Map data provided by 3D Mapping Solutions GmbH.
 
 
 #### Control Data
