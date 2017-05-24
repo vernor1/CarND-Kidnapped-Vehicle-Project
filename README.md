@@ -1,4 +1,4 @@
-# Kidnapped Vehicle Project
+# Particle Filter Project
 
 The goals / steps of this project are the following:
 
